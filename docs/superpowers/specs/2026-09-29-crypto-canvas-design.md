@@ -18,13 +18,13 @@
 
 - 文件大小上限：**10 MB**（约一首 MP3 的容量）
 - Python 版本：≥ 3.10（已验证 3.14.5 可用）
-- 操作系统：macOS / Linux / Windows（matplotlib + PyOpenGL 后端依赖）
+- 操作系统：macOS / Linux / Windows（matplotlib + PyOpenGL + tkinter 后端依赖）
 - 输出格式：单 PNG 文件（含全部密文与密钥元数据）
 - 依赖库：
   - 核心：`cryptography`, `matplotlib`, `numpy`, `pillow`, `argon2-cffi`, `pytest`
-  - CPU 监控：`psutil`
   - GPU 拉满：`PyOpenGL`, `glfw`, `GPUtil`
-- **演示增强**：加密过程主动拉满 CPU 与 GPU（详见 §17）
+  - 像素人物：`tkinter`（Python 标准库，无需安装）
+- **演示增强**：加密过程主动拉满 CPU 与 GPU + 像素人物原地跑步动画（详见 §17）
 
 ## 3. 架构
 
@@ -56,14 +56,14 @@
 
 | 模块 | 路径 | 职责 |
 |------|------|------|
-| `crypto_canvas.py` | 根目录 | CLI 入口（argparse）+ matplotlib GUI + 实时监控面板 |
+| `crypto_canvas.py` | 根目录 | CLI 入口（argparse）+ matplotlib GUI |
 | `crypto/trajectory.py` | `crypto/` | 轨迹采集、几何指纹、置换算法 |
 | `crypto/cipher.py` | `crypto/` | AES-256-GCM 加/解密封装（含 multiprocessing 并行） |
 | `crypto/kdf.py` | `crypto/` | Argon2id 密钥派生（拉满演示参数） |
 | `crypto/visualizer.py` | `crypto/` | HSV 像素图渲染 + 16×16 散点视图 |
 | `crypto/container.py` | `crypto/` | PNG tEXt 元数据读写 |
 | `crypto/gpu_window.py` | `crypto/` | OpenGL fragment shader 拉满 GPU（独立线程） |
-| `crypto/monitor.py` | `crypto/` | psutil + GPUtil 实时监控，进度回调 |
+| `crypto/runner.py` | `crypto/` | tkinter 像素人物跑步窗口（独立线程） |
 | `tests/test_*.py` | `tests/` | 单元测试与端到端测试 |
 | `examples/` | `examples/` | 示例文件与样本轨迹 |
 
@@ -307,17 +307,35 @@ def trajectory_fingerprint(trajectory):
   - 轨迹 < 10 点 → 抛 ValueError
 
 - `test_cipher.py`
-  - AES-GCM 加解密往返一致
+  - AES-GCM 加解密往返一致（单线程 + 多线程两种路径）
   - 篡改密文 → tag 校验失败
   - 篡改 nonce → tag 校验失败
+  - 并行加密结果长度 = sum(chunk_lengths) + nonces_total
 
 - `test_kdf.py`
   - 同指纹 + 同 salt → 同 key
   - 不同 salt → 不同 key
+  - 派生耗时 ≥ 2s（验证拉满参数生效）
 
 - `test_container.py`
   - 写入所有 tEXt chunk 后 PIL 可读
   - 读取时丢失 chunk → 抛错
+
+- `test_visualizer.py`
+  - 256 字节 → HSV 像素 → 字节反向无损（查找表精确性）
+  - PNG 尺寸计算公式正确性
+  - 10MB 文件渲染时间 < 1s
+
+- `test_gpu_window.py`
+  - 着色器编译无错（OpenGL 上下文可用时）
+  - 无头环境自动跳过 GPU 测试
+  - 窗口 start/stop 幂等
+
+- `test_runner.py`
+  - 4 帧 RUN_FRAMES_LEFT 形状 = (4, 16, 16, 3) uint8
+  - RUN_FRAMES_RIGHT 是 RUN_FRAMES_LEFT 的水平镜像
+  - 帧索引循环 0→1→2→3→0 正确
+  - tkinter 不可用（无显示器）自动跳过窗口测试
 
 ### 9.2 端到端测试
 
@@ -325,30 +343,39 @@ def trajectory_fingerprint(trajectory):
   - 预存轨迹 `examples/circle.traj` → 加密 `sample.txt` → 解密 → SHA-256 比对
   - 10MB 边界文件测试
   - 篡改 PNG 文件 → 解密失败
+  - 加密过程中 `psutil.cpu_percent(interval=0.1)` ≥ 80%（验证 CPU 拉满）
+  - GPU 窗口在加密期间保持运行（mock 测试）
 
 ### 9.3 视觉验收（手动）
 
 - 明文 hex 散点：ASCII 字符集中在 (3-F, 3-F) 区域
 - 密文 hex 散点：256 格近似均匀（卡方检验 χ² < 临界值）
 - 同一文件用不同轨迹加密 → 散点图分布差异肉眼可见
+- 加密期间打开 macOS Activity Monitor，CPU 总占用持续高位
+- GPU 窗口可见 fragment shader 持续滚动动画
 
 ## 10. 项目结构
 
 ```
 mima/
-├── crypto_canvas.py            # CLI 入口（~150 行）
+├── crypto_canvas.py            # CLI 入口 + matplotlib GUI（~250 行）
 ├── crypto/
 │   ├── __init__.py
 │   ├── trajectory.py           # 轨迹/置换（~80 行）
-│   ├── cipher.py               # AES-GCM（~40 行）
-│   ├── kdf.py                  # Argon2id（~30 行）
-│   ├── visualizer.py           # HSV 像素图（~60 行）
-│   └── container.py            # PNG tEXt 读写（~80 行）
+│   ├── cipher.py               # AES-GCM + multiprocessing（~80 行）
+│   ├── kdf.py                  # Argon2id 拉满参数（~30 行）
+│   ├── visualizer.py           # HSV 像素图 + 16×16 散点视图（~80 行）
+│   ├── container.py            # PNG tEXt 读写（~80 行）
+│   ├── gpu_window.py           # OpenGL fragment shader 拉满 GPU（~120 行）
+│   └── runner.py               # tkinter 像素人物跑步窗口（~100 行）
 ├── tests/
 │   ├── test_trajectory.py
 │   ├── test_cipher.py
 │   ├── test_kdf.py
 │   ├── test_container.py
+│   ├── test_visualizer.py
+│   ├── test_gpu_window.py      # 测试 shader 编译（无头环境跳过）
+│   ├── test_runner.py          # 测试帧数据 + 镜像逻辑
 │   └── test_e2e.py
 ├── examples/
 │   ├── sample.txt              # 测试文本
@@ -363,35 +390,49 @@ mima/
 ## 11. CLI 接口
 
 ```bash
-# 加密（弹出画布，画轨迹后按 Enter）
+# 加密（弹出画布，画轨迹后按 Enter，CPU+GPU 全程拉满 + 像素人物向左跑）
 python crypto_canvas.py encrypt <file>
 
-# 解密（从 PNG 还原文件）
+# 解密（从 PNG 还原文件 + 像素人物向右跑）
 python crypto_canvas.py decrypt <file>.png [--output <out>]
 
 # 用预存轨迹加密（无 GUI，跳过轨迹绘制）
 python crypto_canvas.py encrypt <file> --trajectory <traj.json>
 
+# 跳过 GPU 拉满（headless 环境或节能模式）
+python crypto_canvas.py encrypt <file> --no-gpu
+
+# 跳过像素人物窗口（纯 CLI 模式）
+python crypto_canvas.py encrypt <file> --no-runner
+
+# 同时跳过 GPU 与像素人物
+python crypto_canvas.py encrypt <file> --no-gpu --no-runner
+
 # 生成示例轨迹
 python crypto_canvas.py gen-trajectory --shape circle --output circle.traj
 
-# 自检
+# 自检（验证所有依赖与拉满能力）
 python crypto_canvas.py selftest
 
-# 显示规格信息
+# 显示 PNG 规格信息
 python crypto_canvas.py info <file>.png
 ```
 
-## 12. 性能预算
+## 12. 性能预算（含 CPU/GPU 拉满演示）
 
-| 操作 | 文件大小 | 预期耗时 |
-|------|----------|----------|
-| 加密 1 MB | 1 MB | < 3 秒 |
-| 加密 10 MB | 10 MB | < 30 秒 |
-| 解密 1 MB | 1 MB | < 2 秒 |
-| 解密 10 MB | 10 MB | < 20 秒 |
-| 置换表计算 | 256 字节 | < 0.1 秒 |
-| HSV 像素渲染 10 MB | 3240×3238 | < 5 秒 |
+| 操作 | 文件大小 | 预期耗时 | 硬件峰值 |
+|------|----------|----------|----------|
+| 加密 1 MB | 1 MB | ~6 秒 | CPU 8 核 100% / GPU 60 FPS |
+| 加密 10 MB | 10 MB | ~10 秒 | CPU 8 核 100% / GPU 60 FPS |
+| 解密 1 MB | 1 MB | < 2 秒 | CPU 8 核短峰 / GPU 关闭 |
+| 解密 10 MB | 10 MB | ~6 秒 | CPU 8 核短峰 / GPU 关闭 |
+| Argon2id 派生 | — | 3-5 秒 | CPU 100% × 8 核 + 64MB 内存 |
+| 置换表计算 | 256 字节 | < 0.1 秒 | CPU 1 核 |
+| HSV 像素渲染 | 10 MB (3240×3238) | ~0.5 秒 | CPU 1 核 |
+| PNG DEFLATE 压缩 | 10 MB | 2-5 秒 | CPU 1 核 + I/O |
+| OpenGL shader 渲染 | — | 持续 | GPU 100%（加密期间） |
+
+**拉满演示总耗时**：1MB 文件约 6 秒（其中 Argon2id 占 3-5 秒），10MB 文件约 10 秒。GPU 窗口在加密期间持续运行，加密完成后立即关闭。
 
 ## 13. 已知限制
 
@@ -425,9 +466,12 @@ python crypto_canvas.py info <file>.png
 ✅ 所有单元测试通过（pytest）
 ✅ 端到端测试覆盖典型用户路径
 ✅ 自检命令（selftest）输出全部通过标记
-✅ 加密过程中 CPU 持续 ≥80%（psutil 验证）
+✅ 加密过程中 CPU 持续 ≥80%
 ✅ 桌面环境下 GPU 窗口可见运行（fragment shader 持续渲染）
-✅ GUI 实时显示 CPU%/GPU%/进度阶段
+✅ 加密时像素人物窗口弹出，角色**面向左**原地跑步
+✅ 解密时像素人物窗口弹出，角色**面向右**原地跑步
+✅ 加密/解密完成后人物窗口自动关闭
+✅ 无进度条，纯靠人物动画传达"进行中"
 
 ## 16. 后续可能的扩展（YAGNI 当前不做）
 
@@ -538,45 +582,136 @@ class GPUStressWindow:
         glfw.terminate()
 ```
 
-### 17.3 实时监控 UI
+### 17.3 视觉反馈：像素画跑步角色 ⭐
 
-matplotlib 画布右侧叠加监控面板（200px 宽）：
+> **设计原则**：进度条是工程感的反馈，像素人物跑步是游戏感的反馈。教学场景下后者更能让用户"乐在其中"，同时自然暗示"还在跑（还没完成）"。
+
+加密/解密时弹出独立 tkinter 窗口，**16×16 像素人物原地跑步**：
+- 加密时：角色**面向左**（每帧水平翻转）
+- 解密时：角色**面向右**
+- 4 帧循环动画，每 100ms 切换（10 FPS，经典像素游戏节奏）
+- 无进度条、无文字——纯粹靠"还在动"传达加密进行中
+
+**角色设计**（4 帧，每帧 16×16 RGB numpy 数组）：
 
 ```
-┌──────────────────────────┐
-│ 加密进度                  │
-├──────────────────────────┤
-│ [████████░░░░░] 60%      │
-│ 阶段: AES-GCM 并行加密    │
-├──────────────────────────┤
-│ CPU: ████████░░ 82%      │
-│  核心: [✓][✓][✓][✓][✓]…  │
-│ 内存: 142 MB / 256 MB    │
-├──────────────────────────┤
-│ GPU: [OpenGL 渲染中]     │
-│  帧率: 60 FPS            │
-└──────────────────────────┘
+Frame 0 / 2（左/右脚在前）：       Frame 1 / 3（左/右脚在后）：
+   . . X X X X X X . . . . . . . .    . . X X X X X X X . . . . . . . .
+   . X X X X X X X X . . . . . . .    . X X X X X X X X . . . . . . . .
+   . X O . X O X X X . . . . . . .    . X O . X O X X X . . . . . . . .
+   . X X X X X X X . . . . . . . .    . X X X X X X X . . . . . . . . .
+   . . X X X X X . . . . . . . . .    . . X X X X X . . . . . . . . . .
+   . X X X X X X X . . . . . . . .    . X X X X X X X . . . . . . . . .
+   X X X . X . X X X . . . . . . .    X X . X . X X X X . . . . . . . .
+   X X . . X . . X X . . . . . . .    X X . . X . . X X . . . . . . . .
+   . . . X X X . . . . . . . . . .    . . X X . X X . . . . . . . . . .
+   . . X X . X X . . . . . . . . .    . . X . . . X X . . . . . . . . .
+   . X X . . . X X . . . . . . . .    . X . . . . . X X . . . . . . . .
+   X X . . . . . X X . . . . . . .    X . . . . . . . X X . . . . . . .
 ```
 
-**实现**：用 `matplotlib.gridspec` 分两栏，左边画轨迹，右边画监控图表（用 `matplotlib.animation.FuncAnimation` 每 200ms 更新）。
+颜色：身体蓝色（`#3060E0`）、头部肤色（`#F0C090`）、眼睛黑色
 
-### 17.4 加密阶段流水线（用户可见）
+**实现**（`crypto/runner.py`）：
 
-| 阶段 | 持续时间 | 硬件占用 | 用户反馈 |
+```python
+import tkinter as tk
+import numpy as np
+from PIL import Image, ImageTk
+from threading import Thread
+
+# 预定义帧（省略具体像素数据，4 帧一组）
+RUN_FRAMES_LEFT = [
+    np.array([[0,0,0], ...], dtype=np.uint8).reshape(16, 16, 3),  # frame 0
+    np.array([[0,0,0], ...], dtype=np.uint8).reshape(16, 16, 3),  # frame 1
+    np.array([[0,0,0], ...], dtype=np.uint8).reshape(16, 16, 3),  # frame 2
+    np.array([[0,0,0], ...], dtype=np.uint8).reshape(16, 16, 3),  # frame 3
+]
+# 右侧 = 左侧水平镜像
+RUN_FRAMES_RIGHT = [np.fliplr(f) for f in RUN_FRAMES_LEFT]
+
+
+class RunnerWindow:
+    """像素人物跑步动画窗口，独立线程运行。"""
+
+    def __init__(self, direction: str = "left"):
+        self.direction = direction
+        self.root = None
+        self.thread = None
+        self.running = False
+
+    def start(self):
+        """启动窗口（独立线程，不阻塞主流程）。"""
+        self.thread = Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        self.root = tk.Tk()
+        title = "🔒 加密中" if self.direction == "left" else "🔓 解密中"
+        self.root.title(title)
+        self.root.resizable(False, False)
+        self.label = tk.Label(self.root, bg="#1a1a1a")
+        self.label.pack(padx=20, pady=20)
+
+        self.frames = RUN_FRAMES_LEFT if self.direction == "left" else RUN_FRAMES_RIGHT
+        self.frame_idx = 0
+        self.running = True
+        self._animate()
+        self.root.mainloop()
+
+    def _animate(self):
+        if not self.running:
+            return
+        # 16x16 numpy → PIL → 放大到 256x256（nearest 保留像素感）→ tkinter PhotoImage
+        frame = self.frames[self.frame_idx]
+        img = Image.fromarray(frame).resize((256, 256), Image.NEAREST)
+        photo = ImageTk.PhotoImage(img)
+        self.label.configure(image=photo)
+        self.label.image = photo  # 防止 GC
+        self.frame_idx = (self.frame_idx + 1) % len(self.frames)
+        self.root.after(100, self._animate)  # 10 FPS
+
+    def stop(self):
+        """关闭窗口。"""
+        self.running = False
+        if self.root:
+            self.root.after(0, self.root.destroy)
+
+
+# 使用示例（在 crypto_canvas.py 中）
+def encrypt_file_with_runner(input_path, output_path):
+    runner = RunnerWindow(direction="left")
+    runner.start()
+    try:
+        # ... 实际加密流程（Argon2id + AES + PNG）
+        ...
+    finally:
+        runner.stop()
+```
+
+**为什么不需要进度条**：
+- 像素人物腿在动 = "还在加密"，腿停了 = "完成了"
+- 10 FPS 的循环动画已经形成强烈的"进行中"信号
+- 用户的视线会自然落在人物上，不需要百分比数字
+- 加进度条反而破坏像素游戏的复古美学
+
+### 17.4 加密阶段流水线（用户感知）
+
+| 阶段 | 持续时间 | 硬件占用 | 用户感知 |
 |------|----------|----------|----------|
-| 1. 置换表计算 | <0.1s | CPU 1 核 | "生成视觉置换..." |
-| 2. Argon2id 派生 | 3-5s | CPU 8 核 + 64MB 内存 | "派生加密密钥..." |
-| 3. AES-GCM 并行加密 | 0.05s | CPU 8 核 | "AES 加密..." |
-| 4. HSV 像素编码 | 0.5s | CPU 1 核 | "渲染像素..." |
-| 5. PNG 写入 | 2-5s | CPU 1 核 + I/O | "压缩 PNG..." |
-| **总计** | **6-11s** | **全程硬件忙** | GUI 全程动画 |
+| 1. 置换表计算 | <0.1s | CPU 1 核 | 人物刚开始跑 |
+| 2. Argon2id 派生 | 3-5s | CPU 8 核 + 64MB 内存 | 人物跑得很用力（CPU 飙满） |
+| 3. AES-GCM 并行加密 | 0.05s | CPU 8 核 | 几乎瞬间 |
+| 4. HSV 像素编码 | 0.5s | CPU 1 核 | 人物持续跑 |
+| 5. PNG 写入 | 2-5s | CPU 1 核 + I/O | 人物持续跑 |
+| **总计** | **6-11s** | **全程硬件忙** | 人物原地跑了 6-11 秒 |
 
 ### 17.5 Headless 降级
 
-无 `DISPLAY` / 无 OpenGL 上下文时：
-- GPU 窗口自动跳过，CPU 拉满照常
-- 监控面板只显示 CPU%，GPU 字段显示 "N/A (headless)"
-- 日志提示 "GPU 拉满已跳过，可在桌面环境启用"
+无 `DISPLAY` / 无 tkinter 可用时：
+- Runner 窗口自动跳过，CPU 拉满照常
+- 日志提示 "像素人物窗口已跳过（headless 环境）"
+- 不影响加密流程
 
 ### 17.6 安全说明
 
