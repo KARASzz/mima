@@ -8,16 +8,22 @@
   selftest              运行自检
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
 
 def encrypt_cmd(args):
     """加密命令。"""
-    from crypto.trajectory_gui import collect_trajectory
     from crypto.encrypt import encrypt_file
 
-    trajectory = collect_trajectory()
+    if args.trajectory:
+        with open(args.trajectory, "r") as f:
+            trajectory = [tuple(p) for p in json.load(f)]
+    else:
+        from crypto.trajectory_gui import collect_trajectory
+        trajectory = collect_trajectory()
+
     output_path = args.output or (args.file + ".png")
     stats = encrypt_file(
         args.file,

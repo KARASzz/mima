@@ -1,0 +1,15 @@
+Crypto Canvas Demo
+==================
+
+This is a sample text file used to demonstrate the Crypto Canvas
+encryption tool. The tool will encrypt this file into a single PNG
+image using AES-256-GCM with Argon2id key derivation, and you can
+visualize the encryption by drawing a trajectory on the complex plane.
+
+The encrypted PNG contains:
+1. The ciphertext (encoded as HSV pixel colors)
+2. The trajectory that was used (in PNG metadata)
+3. The Argon2id salt
+4. The AES-GCM nonce and tag
+
+To decrypt, simply provide the same PNG to the decrypt command.
