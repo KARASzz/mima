@@ -1,0 +1,25 @@
+[project]
+name = "crypto-canvas"
+version = "0.1.0"
+description = "Visualizable file encryption via trajectory-based AES-256-GCM"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42.0",
+    "argon2-cffi>=23.1",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "PyOpenGL>=3.1",
+    "glfw>=2.6",
+    "GPUtil>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["crypto*"]
