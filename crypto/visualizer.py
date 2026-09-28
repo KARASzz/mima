@@ -69,6 +69,9 @@ def bytes_to_pixels(data: bytes) -> Tuple[np.ndarray, int, int]:
 
     像素数 ≥ 字节数，多余像素填 0（H=0 = 红色）。
     尺寸取 ceil(sqrt(N)) × ceil(N/W)，尽量接近正方形。
+
+    向量化：通过将 BYTE_TO_RGB 转为 numpy LUT 一次性查表，避免 Python 循环。
+    尾部 padding 像素用 byte 0 的 RGB（红色）填充。
     """
     n = len(data)
     if n == 0:
@@ -76,13 +79,21 @@ def bytes_to_pixels(data: bytes) -> Tuple[np.ndarray, int, int]:
 
     w = max(1, math.ceil(math.sqrt(n)))
     h = math.ceil(n / w)
+    total = h * w
 
-    pixels = np.zeros((h, w, 3), dtype=np.uint8)
-    for i, b in enumerate(data):
-        rgb = BYTE_TO_RGB[b]
-        row, col = divmod(i, w)
-        pixels[row, col] = rgb
+    # Vectorized lookup: convert BYTE_TO_RGB table to numpy array
+    lut = np.array(BYTE_TO_RGB, dtype=np.uint8)  # shape (256, 3)
+    byte_arr = np.frombuffer(data, dtype=np.uint8)
+    if len(byte_arr) < total:
+        # Pad with byte 0 so reshape(h, w, 3) always has exactly total*3 values
+        padded = np.zeros(total, dtype=np.uint8)
+        padded[:len(byte_arr)] = byte_arr
+        byte_arr = padded
+    elif len(byte_arr) > total:
+        byte_arr = byte_arr[:total]
 
+    flat_pixels = lut[byte_arr]  # shape (total, 3)
+    pixels = flat_pixels.reshape(h, w, 3)
     return pixels, w, h
 
 
