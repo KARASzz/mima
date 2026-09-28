@@ -63,6 +63,7 @@ def info_cmd(args):
     print(f"Salt: {container.salt.hex()[:16]}...")
     print(f"Nonce: {container.nonce.hex()[:16]}...")
     print(f"Tag: {container.tag.hex()[:16]}...")
+    print(f"Ciphertext length: {container.ciphertext_len} bytes")
 
 
 def selftest_cmd(args):
