@@ -96,6 +96,8 @@ def decrypt_file(
 
         elapsed = time.time() - start_time
         return {
+            "input_path": input_png,
+            "output_path": output_path,
             "input_size": os.path.getsize(input_png),
             "output_size": len(plaintext),
             "elapsed_seconds": elapsed,

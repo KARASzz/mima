@@ -110,6 +110,8 @@ def encrypt_file(
 
         elapsed = time.time() - start_time
         return {
+            "input_path": input_path,
+            "output_path": output_path,
             "input_size": file_size,
             "output_size": os.path.getsize(output_path),
             "elapsed_seconds": elapsed,
