@@ -82,7 +82,7 @@ platforms.
 pip install -r requirements.txt
 ```
 
-Requires Python 3.10+, NumPy, Pillow, PyOpenGL, glfw, matplotlib, pycryptodome,
+Requires Python 3.10+, NumPy, Pillow, PyOpenGL, glfw, matplotlib, cryptography,
 argon2-cffi, and pytest (for `selftest`).
 
 ---
