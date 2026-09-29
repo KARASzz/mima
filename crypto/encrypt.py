@@ -11,10 +11,17 @@ parallel_encrypt 输出格式（来自 cipher.py）：
 - container.ciphertext_len 记录 chunks 部分的字节数（不含 8B 头）
   即 ciphertext_len = len(parallel_encrypt_output) - 8
 - 解密时用 ciphertext_len + 8 还原总长度，再交由 parallel_decrypt 自行解析。
+
+线程模型（spec §17）：
+- macOS 上 RunnerWindow 必须在主线程运行（AppKit 限制）。因此加密逻辑放到
+  worker 线程，主线程调用 RunnerWindow.run_blocking()。
+- 其他平台：GPU/runner 窗口在 worker 线程运行，加密在主线程（向后兼容）。
 """
 import hashlib
 import logging
 import os
+import sys
+import threading
 import time
 
 from .cipher import parallel_encrypt
@@ -62,63 +69,103 @@ def encrypt_file(
     """
     start_time = time.time()
 
-    # 启动可视化窗口（macOS 上由各 start() 内部静默跳过）
+    # 实例化窗口对象（不启动）
     gpu_win = None
     runner_win = None
     if use_runner:
         from .runner import RunnerWindow
         runner_win = RunnerWindow(direction="left")
-        runner_win.start()
     if use_gpu:
         from .gpu_window import GPUStressWindow
         gpu_win = GPUStressWindow()
-        gpu_win.start()
+        gpu_win.start()  # GPU 窗口：worker 线程；macOS 上内部静默跳过
 
+    # macOS: RunnerWindow 必须在主线程运行；加密逻辑放到 worker 线程
+    if sys.platform == "darwin" and runner_win is not None:
+        result_holder: dict = {}
+
+        def crypto_worker():
+            try:
+                result_holder["stats"] = _do_encrypt(
+                    input_path, output_path, trajectory, start_time
+                )
+            except Exception as e:  # noqa: BLE001
+                result_holder["error"] = e
+            finally:
+                if runner_win is not None:
+                    runner_win.stop()  # 触发 mainloop 退出，释放主线程
+
+        worker = threading.Thread(target=crypto_worker, daemon=True)
+        worker.start()
+        runner_win.run_blocking()  # 主线程阻塞；worker.crypto_worker 调用 stop() 解除
+        worker.join(timeout=10)
+
+        if gpu_win is not None:
+            gpu_win.stop()
+
+        if "error" in result_holder:
+            raise result_holder["error"]
+        return result_holder["stats"]
+
+    # 其他平台：原有模式（GUI 在 worker 线程，加密在主线程）
     try:
-        # 1. 读取文件
-        file_size = os.path.getsize(input_path)
-        if file_size > MAX_FILE_SIZE:
-            raise FileTooLarge(f"文件过大（{file_size} > {MAX_FILE_SIZE} bytes）")
-
-        with open(input_path, "rb") as f:
-            plaintext = f.read()
-
-        # 2. 视觉密码层：置换
-        perm = trajectory_to_permutation(trajectory)
-        permuted = apply_permutation(plaintext, perm)
-
-        # 3. 加密层：派生密钥 + AES-GCM 并行
-        salt = os.urandom(16)
-        key = derive_key(trajectory_fingerprint(trajectory), salt)
-        ciphertext_with_header = parallel_encrypt(key, permuted)
-        # ciphertext_with_header = [8B plaintext_len] + chunks
-
-        # 4. 渲染层：HSV 像素（编码完整 ciphertext，含 8B 头）
-        pixels, w, h = bytes_to_pixels(ciphertext_with_header)
-
-        # 5. 写入 PNG
-        container = PngContainer(
-            algo="AES-256-GCM-v1",
-            trajectory=trajectory,
-            trajectory_hash=hashlib.sha256(trajectory_fingerprint(trajectory)).hexdigest(),
-            salt=salt,
-            nonce=b"",  # 实际 nonce 嵌入在 ciphertext_with_header 中
-            tag=b"",    # 同上
-            ciphertext_len=len(ciphertext_with_header) - 8,  # 仅 chunks 部分
-        )
-        write_encrypted_png(output_path, pixels, w, h, container)
-
-        elapsed = time.time() - start_time
-        return {
-            "input_path": input_path,
-            "output_path": output_path,
-            "input_size": file_size,
-            "output_size": os.path.getsize(output_path),
-            "elapsed_seconds": elapsed,
-            "trajectory_points": len(trajectory),
-        }
+        if runner_win is not None:
+            runner_win.start()
+        stats_dict = _do_encrypt(input_path, output_path, trajectory, start_time)
+        return stats_dict
     finally:
         if gpu_win is not None:
             gpu_win.stop()
         if runner_win is not None:
             runner_win.stop()
+
+
+def _do_encrypt(
+    input_path: str,
+    output_path: str,
+    trajectory: list,
+    start_time: float,
+) -> dict:
+    """实际加密逻辑（不含窗口管理）。可被主线程或 worker 线程调用。"""
+    # 1. 读取文件
+    file_size = os.path.getsize(input_path)
+    if file_size > MAX_FILE_SIZE:
+        raise FileTooLarge(f"文件过大（{file_size} > {MAX_FILE_SIZE} bytes）")
+
+    with open(input_path, "rb") as f:
+        plaintext = f.read()
+
+    # 2. 视觉密码层：置换
+    perm = trajectory_to_permutation(trajectory)
+    permuted = apply_permutation(plaintext, perm)
+
+    # 3. 加密层：派生密钥 + AES-GCM 并行
+    salt = os.urandom(16)
+    key = derive_key(trajectory_fingerprint(trajectory), salt)
+    ciphertext_with_header = parallel_encrypt(key, permuted)
+    # ciphertext_with_header = [8B plaintext_len] + chunks
+
+    # 4. 渲染层：HSV 像素（编码完整 ciphertext，含 8B 头）
+    pixels, w, h = bytes_to_pixels(ciphertext_with_header)
+
+    # 5. 写入 PNG
+    container = PngContainer(
+        algo="AES-256-GCM-v1",
+        trajectory=trajectory,
+        trajectory_hash=hashlib.sha256(trajectory_fingerprint(trajectory)).hexdigest(),
+        salt=salt,
+        nonce=b"",  # 实际 nonce 嵌入在 ciphertext_with_header 中
+        tag=b"",    # 同上
+        ciphertext_len=len(ciphertext_with_header) - 8,  # 仅 chunks 部分
+    )
+    write_encrypted_png(output_path, pixels, w, h, container)
+
+    elapsed = time.time() - start_time
+    return {
+        "input_path": input_path,
+        "output_path": output_path,
+        "input_size": file_size,
+        "output_size": os.path.getsize(output_path),
+        "elapsed_seconds": elapsed,
+        "trajectory_points": len(trajectory),
+    }
