@@ -26,20 +26,28 @@ PNG 自带了解密所需的一切：密文编码为彩色像素，外加轨迹�
 
 > **如果你在 macOS 上运行，请先阅读这一节。**
 
-GPU 压力窗口（OpenGL fragment shader）和像素人物动画窗口（tkinter）
-在 macOS 上**静默跳过**。加密管线本身在所有平台都能正常运行；
-只有视觉反馈在 macOS 上被屏蔽。
+GPU 压力窗口（OpenGL fragment shader）在 macOS 上**静默跳过**。
+像素人物动画窗口（tkinter）在 macOS 上**正常运行** —— 加密管线
+本身在所有平台都能运行。
 
 ### 原因
 
 - macOS AppKit（Cocoa）要求每个 `NSWindow` 必须在**主线程**实例化。
-- 这两个窗口运行在**工作线程**中，避免阻塞加密/解密管线。
 - 在 macOS 上，从工作线程调用 AppKit 会触发
   `NSInternalInconsistencyException` — 这是一个**无法拦截的 C++ 异常**，
   会导致整个进程崩溃。
-- 为避免崩溃，实现者在 `crypto/gpu_window.py` 和 `crypto/runner.py`
-  中添加了 `sys.platform == "darwin"` 守卫。当运行在 macOS 上时，
-  两个 `start()` 方法只记录一条 info 日志后立即返回。
+
+### 当前实现
+
+**像素人物窗口（tkinter）** — `RunnerWindow.run_blocking()` 由主线程调用，
+加密 / 解密逻辑放到 worker 线程。这是 macOS 上**必需**的模式（AppKit 限制），
+也是其他平台的正确模式（事件循环驱动）。`start()` 仍向后兼容旧的
+worker-thread 模式，但在 macOS 上会打印 warning 后直接返回，
+提示调用方改用 `run_blocking()`。
+
+**GPU 压力窗口（OpenGL fragment shader）** — 仍在 `sys.platform == "darwin"`
+守卫下静默跳过（`crypto/gpu_window.py`）。要在 macOS 上运行需将其
+也移到主线程，超出本演示范围。
 
 ### 影响
 
@@ -49,22 +57,11 @@ GPU 压力窗口（OpenGL fragment shader）和像素人物动画窗口（tkinte
 | Argon2id CPU 压力             | ✅ 运行          | ✅ 运行                      |
 | 多进程并行 AES                | ✅ 运行          | ✅ 运行                      |
 | OpenGL GPU 压力窗口           | ✅ 运行          | ⚠️ **静默跳过**              |
-| 像素人物动画                  | ✅ 运行          | ⚠️ **静默跳过**              |
+| 像素人物动画                  | ✅ 运行          | runs (main-thread Tk)       |
 | 轨迹绘制 GUI                  | ✅ 运行          | ✅ 运行（matplotlib 后端）   |
 
-在 macOS 上，加密/解密能成功完成并产出相同的 PNG 文件，但**看不到**
-GPU 算力窗口或跑步的像素人物。在 Linux / Windows 上，所有组件按设计运行。
-
-### 解决方案（不在范围内）
-
-要使 macOS 上的视觉反馈生效，需要以下方案之一：
-
-- 在主线程运行 tkinter / OpenGL，加密逻辑运行在工作线程（需要在
-  入口点进行进程级或线程级编排）。
-- 使用平台特定的替代方案（例如 PyObjC + `NSAppKit`，或在打包器中
-  预先启动 GUI 线程）。
-
-这些都不在本演示范围内。所有平台的核心加密功能都能工作。
+在 macOS 上，加密/解密能成功完成并产出相同的 PNG 文件，且能**看到**
+像素人物窗口。OpenGL GPU 压力窗口仍看不到。
 
 ---
 
@@ -189,7 +186,7 @@ crypto/
   container.py        PNG tEXt chunk 读写
   visualizer.py       无损字节 ↔ 像素 HSV 编码
   gpu_window.py       OpenGL fragment-shader 压力窗口（macOS 跳过）
-  runner.py           Tkinter 像素人物动画（macOS 跳过）
+  runner.py           Tkinter 像素人物动画（macOS 主线程模式）
   trajectory_gui.py   Matplotlib 交互式轨迹绘制
   encrypt.py          加密编排（调用所有层）
   decrypt.py          解密编排（加密的逆过程）
