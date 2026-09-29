@@ -1,124 +1,116 @@
 # Crypto Canvas
 
-> Visualizable file encryption — "画图即加密"
+> 可视化文件加密 — "画图即加密"
 
-A demo Python tool that encrypts files (≤10 MB) into single, self-contained PNG
-images. The encryption key is derived from a user-drawn trajectory on the complex
-plane, and the encryption process intentionally pulls both CPU (multiprocessing +
-Argon2id) and GPU (OpenGL fragment shader) to full utilization while a 16×16 pixel
-character runs on screen.
+一个 Python 演示工具，将文件（≤10 MB）加密为单个自包含的 PNG 图像。
+加密密钥由用户在复平面上绘制的轨迹派生而来，加密过程会主动拉满
+CPU（multiprocessing + Argon2id）和 GPU（OpenGL fragment shader），
+同时屏幕上有一个 16×16 的像素人物在跑动。
 
-The PNG carries everything needed to decrypt: ciphertext encoded as colored
-pixels, plus the trajectory, salt, and metadata in PNG `tEXt` chunks. Sharing the
-image is sharing the locked file.
+PNG 自带了解密所需的一切：密文编码为彩色像素，外加轨迹、盐和元数据
+（保存在 PNG `tEXt` chunks 中）。分享图像就是分享加密后的文件。
 
-## Features
+## 特性
 
-- **Single PNG output** — ciphertext, key material, and visualization in one file
-- **Trajectory-based visual cipher** — draw on the complex plane → 256-byte permutation
-- **AES-256-GCM + Argon2id** — industrial-strength encryption with intentional CPU stress
-- **OpenGL fragment shader window** — GPU pinned at ~60 FPS during encryption
-- **Pixel character animation** — 16×16 character runs left (encrypt) / right (decrypt)
-- **Lossless HSV encoding** — every byte maps to a unique RGB pixel
-- **Trajectory integrity check** — SHA-256 of the trajectory is stored in PNG metadata; tampering is detected on decrypt
+- **单 PNG 输出** — 密文、密钥材料和可视化都在同一个文件中
+- **基于轨迹的视觉密码** — 在复平面上画图 → 256 字节置换表
+- **AES-256-GCM + Argon2id** — 工业级加密算法，主动制造 CPU 压力
+- **OpenGL fragment shader 窗口** — 加密期间 GPU 持续 ~60 FPS
+- **像素人物动画** — 16×16 角色加密时**向左**跑、解密时**向右**跑
+- **无损 HSV 编码** — 每个字节映射到唯一的 RGB 像素
+- **轨迹完整性校验** — 轨迹的 SHA-256 写入 PNG 元数据，篡改会在解密时被发现
 
 ---
 
-## ⚠️ macOS Platform Limitations
+## ⚠️ macOS 平台限制
 
-> **If you are running this on macOS, read this first.**
+> **如果你在 macOS 上运行，请先阅读这一节。**
 
-Both the GPU stress window (OpenGL fragment shader) and the pixel character
-animation window (tkinter) **silently no-op on macOS**. The crypto pipeline
-itself runs correctly on every platform; only the visual feedback is suppressed
-on macOS.
+GPU 压力窗口（OpenGL fragment shader）和像素人物动画窗口（tkinter）
+在 macOS 上**静默跳过**。加密管线本身在所有平台都能正常运行；
+只有视觉反馈在 macOS 上被屏蔽。
 
-### Why
+### 原因
 
-- macOS AppKit (Cocoa) requires every `NSWindow` to be instantiated on the
-  **main thread**.
-- Both windows run in **worker threads** so they do not block the encrypt /
-  decrypt pipeline.
-- On macOS, calling AppKit from a worker thread triggers
-  `NSInternalInconsistencyException` — an **uninterceptable C++ exception**
-  that crashes the whole process.
-- To prevent the crash, the implementer added `sys.platform == "darwin"` guards
-  in `crypto/gpu_window.py` and `crypto/runner.py`. When running on macOS, both
-  `start()` methods log an info message and return immediately.
+- macOS AppKit（Cocoa）要求每个 `NSWindow` 必须在**主线程**实例化。
+- 这两个窗口运行在**工作线程**中，避免阻塞加密/解密管线。
+- 在 macOS 上，从工作线程调用 AppKit 会触发
+  `NSInternalInconsistencyException` — 这是一个**无法拦截的 C++ 异常**，
+  会导致整个进程崩溃。
+- 为避免崩溃，实现者在 `crypto/gpu_window.py` 和 `crypto/runner.py`
+  中添加了 `sys.platform == "darwin"` 守卫。当运行在 macOS 上时，
+  两个 `start()` 方法只记录一条 info 日志后立即返回。
 
-### Impact
+### 影响
 
-| Component                     | Linux / Windows | macOS                       |
+| 组件                          | Linux / Windows | macOS                       |
 |-------------------------------|-----------------|-----------------------------|
-| Encrypt / decrypt pipeline    | works           | works                       |
-| Argon2id CPU stress           | works           | works                       |
-| Multiprocessing parallel AES  | works           | works                       |
-| OpenGL GPU stress window      | runs            | **skipped (silent no-op)**  |
-| Pixel character animation     | runs            | **skipped (silent no-op)**  |
-| Trajectory drawing GUI        | runs            | runs (matplotlib backend)   |
+| 加密 / 解密管线               | ✅ 运行          | ✅ 运行                      |
+| Argon2id CPU 压力             | ✅ 运行          | ✅ 运行                      |
+| 多进程并行 AES                | ✅ 运行          | ✅ 运行                      |
+| OpenGL GPU 压力窗口           | ✅ 运行          | ⚠️ **静默跳过**              |
+| 像素人物动画                  | ✅ 运行          | ⚠️ **静默跳过**              |
+| 轨迹绘制 GUI                  | ✅ 运行          | ✅ 运行（matplotlib 后端）   |
 
-On macOS, encrypt / decrypt completes successfully and produces the same output
-PNG, but you will **not** see the GPU crunch window or the running pixel
-character. On Linux / Windows, every component runs as designed.
+在 macOS 上，加密/解密能成功完成并产出相同的 PNG 文件，但**看不到**
+GPU 算力窗口或跑步的像素人物。在 Linux / Windows 上，所有组件按设计运行。
 
-### Workarounds (out of scope)
+### 解决方案（不在范围内）
 
-Making the visual feedback work on macOS would require one of:
+要使 macOS 上的视觉反馈生效，需要以下方案之一：
 
-- Running tkinter / OpenGL on the main thread while crypto runs in a worker
-  thread (requires process-based or threading orchestration across the entry
-  point).
-- Using platform-specific alternatives (e.g. PyObjC + `NSAppKit`, or running
-  inside a bundler that pre-spawns the GUI thread).
+- 在主线程运行 tkinter / OpenGL，加密逻辑运行在工作线程（需要在
+  入口点进行进程级或线程级编排）。
+- 使用平台特定的替代方案（例如 PyObjC + `NSAppKit`，或在打包器中
+  预先启动 GUI 线程）。
 
-This is out of scope for the demo. The core crypto functionality works on all
-platforms.
+这些都不在本演示范围内。所有平台的核心加密功能都能工作。
 
 ---
 
-## Installation
+## 安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Requires Python 3.10+, NumPy, Pillow, PyOpenGL, glfw, matplotlib, cryptography,
-argon2-cffi, and pytest (for `selftest`).
+依赖 Python 3.10+、NumPy、Pillow、PyOpenGL、glfw、matplotlib、cryptography、
+argon2-cffi，以及 pytest（用于 `selftest`）。
 
 ---
 
-## Usage
+## 使用方法
 
 ```bash
-# Encrypt a file (interactive trajectory drawing)
+# 加密文件（交互式轨迹绘制）
 python crypto_canvas.py encrypt myfile.txt
 
-# Decrypt a PNG back to the original file
+# 解密 PNG 还原原始文件
 python crypto_canvas.py decrypt myfile.txt.png
 
-# Show PNG metadata (algorithm, trajectory, salt, ...)
+# 显示 PNG 元数据（算法、轨迹、盐等）
 python crypto_canvas.py info myfile.txt.png
 
-# Run all tests
+# 运行所有测试
 python crypto_canvas.py selftest
 ```
 
-### CLI flags
+### CLI 标志
 
-| Flag                          | Applies to  | Description                                                                |
-|-------------------------------|-------------|----------------------------------------------------------------------------|
-| `-o, --output <path>`         | encrypt/decrypt | Custom output path (default: `<file>.png` for encrypt, `<file>_decrypted` for decrypt) |
-| `--no-gpu`                    | encrypt/decrypt | Skip the OpenGL fragment-shader GPU stress window                          |
-| `--no-runner`                 | encrypt/decrypt | Skip the tkinter pixel-character animation window                          |
-| `--trajectory <file.json>`    | encrypt     | Use a pre-saved trajectory (`examples/circle.traj`) and skip the GUI       |
-| `--help`                      | all         | Show subcommand help                                                       |
+| 标志                          | 适用范围       | 描述                                                                |
+|-------------------------------|----------------|----------------------------------------------------------------------------|
+| `-o, --output <path>`         | encrypt/decrypt | 自定义输出路径（默认：encrypt 输出 `<file>.png`，decrypt 输出 `<file>_decrypted`） |
+| `--no-gpu`                    | encrypt/decrypt | 跳过 OpenGL fragment-shader GPU 压力窗口                          |
+| `--no-runner`                 | encrypt/decrypt | 跳过 tkinter 像素人物动画窗口                          |
+| `--trajectory <file.json>`    | encrypt     | 使用预存轨迹（如 `examples/circle.traj`）并跳过 GUI       |
+| `--help`                      | all         | 显示子命令帮助                                                       |
 
-> Note: `--no-gpu` and `--no-runner` are the only opt-outs. On macOS the two
-> windows are already skipped automatically (see **macOS Platform Limitations**).
+> 注意：`--no-gpu` 和 `--no-runner` 是仅有的退出选项。在 macOS 上，
+> 这两个窗口本来就会自动跳过（见 **macOS 平台限制**）。
 
 ---
 
-## Example output
+## 示例输出
 
 ```bash
 $ python crypto_canvas.py encrypt examples/sample.txt \
@@ -137,97 +129,89 @@ Image size: 64x64
 Trajectory points: 40
 Trajectory hash: a3f1d2b9c4e5f678...
 Salt: 7e2c1d4b9a8f6053...
+Ciphertext length: 4809 bytes
 Nonce: ...
 Tag: ...
 ```
 
-The decrypted file is byte-for-byte identical to the original (verified by
-SHA-256 in `tests/test_e2e.py`).
+解密后的文件与原始文件**字节完全一致**（由 `tests/test_e2e.py`
+中的 SHA-256 校验验证）。
 
 ---
 
-## How it works
+## 工作原理
 
-1. **Trajectory drawing** — User draws points on a matplotlib canvas (the
-   complex plane). Optionally use `--trajectory <file.json>` to skip the GUI
-   with a pre-saved list of `(x, y)` points.
-2. **Visual cipher** — The trajectory geometry is hashed (SHA-256) and mapped
-   to a 256-byte permutation table via `crypto/trajectory.py`.
-3. **Byte permutation** — The plaintext bytes are reordered by that
-   permutation. This is not cryptographic on its own; it visually scrambles
-   the data so the ciphertext looks like rainbow noise.
-4. **Key derivation** — `Argon2id(trajectory SHA-256 fingerprint, salt)` → 32-byte
-   AES-256 key (`crypto/kdf.py`). Demo parameters are intentionally aggressive
-   (see Security notes below).
-5. **Encryption** — AES-256-GCM in parallel chunks via `multiprocessing`
-   (`crypto/cipher.py`). Output format:
-   `[8 bytes plaintext length BE] + (nonce + ct + tag) × chunks`.
-6. **HSV rendering** — `crypto/visualizer.py` maps every ciphertext byte to a
-   unique RGB pixel (lossless, full color range).
-7. **PNG output** — `crypto/container.py` writes the pixel grid plus
-   `tEXt` chunks for `algo`, `trajectory`, `trajectory_hash`, `salt`, and
-   `ciphertext_len`. The PNG is self-contained.
-8. **Visual feedback** (non-macOS) — OpenGL fragment shader renders fullscreen
-   GPU load while the pixel character runs across the screen. Both windows
-   are stopped as soon as the crypto finishes.
+1. **轨迹绘制** — 用户在 matplotlib 画布（复平面）上点击。
+   也可以用 `--trajectory <file.json>` 跳过 GUI，使用预存的 `(x, y)` 点列表。
+2. **视觉密码** — 轨迹几何经过 SHA-256 哈希后，通过 `crypto/trajectory.py`
+   映射到 256 字节置换表。
+3. **字节置换** — 明文字节按置换表重新排列。置换本身不具有密码学强度，
+   它的作用是让密文"看上去像彩虹噪点"。
+4. **密钥派生** — `Argon2id(轨迹 SHA-256 指纹, salt)` → 32 字节 AES-256 密钥
+   （`crypto/kdf.py`）。演示参数故意激进（见下方安全说明）。
+5. **加密** — AES-256-GCM 通过 `multiprocessing` 并行分块加密
+   （`crypto/cipher.py`）。输出格式：
+   `[8 字节明文长度大端] + (nonce + ct + tag) × chunks`。
+6. **HSV 渲染** — `crypto/visualizer.py` 将每个密文字节映射到唯一的
+   RGB 像素（无损，覆盖全色域）。
+7. **PNG 输出** — `crypto/container.py` 写入像素网格及 `tEXt` chunks
+   （`algo`、`trajectory`、`trajectory_hash`、`salt`、`ciphertext_len`）。
+   PNG 完全自包含。
+8. **视觉反馈**（非 macOS）— OpenGL fragment shader 渲染全屏 GPU 负载，
+   像素人物在屏幕上跑动。加密完成后两个窗口立即关闭。
 
-The decrypt path is the reverse, with one extra step: the trajectory hash
-stored in PNG metadata is compared against a fresh SHA-256 of the loaded
-trajectory. A mismatch raises `ValueError("轨迹已被篡改")` and aborts.
+解密路径是加密的逆过程，但多一步：从 PNG 元数据中读取轨迹哈希，
+与新计算的 SHA-256 比对。若不匹配则抛出 `ValueError("轨迹已被篡改")` 并中止。
 
 ---
 
-## Security notes
+## 安全说明
 
-This is a **demonstration tool**, not production crypto.
+这是**演示工具**，不是生产级加密方案。
 
-- The Argon2id parameters (`t=5`, `m=64 MiB`, `p=8`) are intentionally
-  aggressive so the CPU stress is visible. For production use, drop to `t=1`,
-  `p=4` (per spec §7.3, §17.6).
-- The byte permutation is **visual only** — it does not add cryptographic
-  strength. AES-256-GCM is what actually protects the data.
-- The trajectory stored inside the PNG is required for decryption. Anyone who
-  can read the PNG can read the trajectory; the Argon2id KDF adds a small
-  amount of brute-force resistance but is not a substitute for a real password.
-- Chunk lengths are inferred from the 8-byte plaintext length header at the
-  start of the ciphertext (no per-chunk length metadata). Spec §2 notes this
-  simplification.
+- Argon2id 参数（`t=5`、`m=64 MiB`、`p=8`）故意激进，让 CPU 压力肉眼可见。
+  生产环境请改回 `t=1`、`p=4`（spec §7.3, §17.6）。
+- 字节置换**只是视觉上的** — 它不增加密码学强度。真正保护数据的是 AES-256-GCM。
+- PNG 中保存的轨迹是解密必需的。任何能读 PNG 的人都能读出轨迹；
+  Argon2id KDF 提供一点点暴力破解阻力，但**不能**替代真正的密码。
+- 分块长度由密文开头的 8 字节明文长度头推断（没有逐块长度元数据）。
+  spec §2 注明了这一简化。
 
 ---
 
-## Project layout
+## 项目结构
 
 ```
 crypto/
-  cipher.py           AES-256-GCM + multiprocessing parallel chunks
-  kdf.py              Argon2id key derivation (demo parameters)
-  trajectory.py       SHA-256 fingerprint → 256-byte permutation
-  container.py        PNG tEXt chunk read/write
-  visualizer.py       Lossless byte ↔ pixel HSV encoding
-  gpu_window.py       OpenGL fragment-shader stress window (skip on macOS)
-  runner.py           Tkinter pixel-character animation (skip on macOS)
-  trajectory_gui.py   Matplotlib interactive trajectory drawing
-  encrypt.py          Encrypt orchestration (calls all layers)
-  decrypt.py          Decrypt orchestration (reverse of encrypt)
-crypto_canvas.py      CLI entry point (encrypt / decrypt / info / selftest)
-tests/                Pytest suite (54 tests, 1 pre-existing KDF timing flake)
+  cipher.py           AES-256-GCM + multiprocessing 并行分块
+  kdf.py              Argon2id 密钥派生（演示参数）
+  trajectory.py       SHA-256 指纹 → 256 字节置换表
+  container.py        PNG tEXt chunk 读写
+  visualizer.py       无损字节 ↔ 像素 HSV 编码
+  gpu_window.py       OpenGL fragment-shader 压力窗口（macOS 跳过）
+  runner.py           Tkinter 像素人物动画（macOS 跳过）
+  trajectory_gui.py   Matplotlib 交互式轨迹绘制
+  encrypt.py          加密编排（调用所有层）
+  decrypt.py          解密编排（加密的逆过程）
+crypto_canvas.py      CLI 入口（encrypt / decrypt / info / selftest）
+tests/                Pytest 测试套件（57 个测试，全部通过）
 examples/
-  circle.traj         Pre-saved trajectory (unit-circle, 40 points)
-  sample.txt          Small demo plaintext
-docs/                 This README + spec + plan
+  circle.traj         预存轨迹（单位圆，40 个点）
+  sample.txt          小型演示明文
+docs/                 本 README + spec + plan
 ```
 
 ---
 
-## Spec
+## 规格说明
 
-The full design document is at
-[`docs/superpowers/specs/2026-09-29-crypto-canvas-design.md`](../superpowers/specs/2026-09-29-crypto-canvas-design.md).
-The implementation plan lives at
-[`docs/superpowers/plans/2026-09-29-crypto-canvas.md`](../superpowers/plans/2026-09-29-crypto-canvas.md).
+完整设计文档位于
+[`docs/superpowers/specs/2026-09-29-crypto-canvas-design.md`](../superpowers/specs/2026-09-29-crypto-canvas-design.md)。
+实现计划位于
+[`docs/superpowers/plans/2026-09-29-crypto-canvas.md`](../superpowers/plans/2026-09-29-crypto-canvas.md)。
 
 ---
 
-## License
+## 许可
 
-Demo / educational use.
+演示 / 教育用途。
