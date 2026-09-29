@@ -9,11 +9,15 @@
 无 tkinter 显示环境自动跳过。
 
 macOS 线程兼容性说明：
-理论上 tkinter 可在 worker 线程中运行；但 macOS 上 Tk 在初始化时会创建
-NSWindow，而 AppKit 要求 NSWindow 必须在主线程实例化 —— 在 worker 线程
-调用 tk.Tk() 会触发 NSInternalInconsistencyException 导致进程崩溃。
-因此与 GPU 窗口相同：在 macOS 上 start() 静默跳过，is_running 保持 False。
-其他平台仍按设计在 worker 线程运行。
+macOS 上 Tk 在初始化时会创建 NSWindow，而 AppKit 要求 NSWindow 必须在主线程
+实例化 —— 在 worker 线程调用 tk.Tk() 会触发 NSInternalInconsistencyException
+导致进程崩溃。
+
+解决方案：GUI 必须在主线程运行，加密逻辑放到工作线程（spec §17）。
+- 跨平台推荐做法：调用方在主线程调用 ``run_blocking()``，加密逻辑放到 worker 线程。
+  这是 macOS 上的**必需**模式，也是其他平台的正确模式（事件循环驱动）。
+- ``start()`` 仍按 worker 线程模式运行（向后兼容 Linux/Windows），但在 macOS
+  上打印 warning 后直接返回（不抛异常），调用方需改用 ``run_blocking()``。
 """
 import logging
 import sys
@@ -118,7 +122,12 @@ class RunnerWindow:
         return self._running
 
     def start(self) -> None:
-        """启动窗口（独立线程，不阻塞主流程）。"""
+        """启动窗口（独立线程，不阻塞主流程）。
+
+        macOS 上打印 warning 后直接返回（NSWindow 必须在主线程实例化，
+        调用方需改用 :meth:`run_blocking` 在主线程运行 GUI）。
+        其他平台：启动 worker 线程调用 :meth:`run_blocking`（向后兼容）。
+        """
         if self._running:
             return
         if self._thread is not None and self._thread.is_alive():
@@ -126,12 +135,24 @@ class RunnerWindow:
         if sys.platform == "darwin":
             # Tk 在初始化时创建 NSWindow，AppKit 要求主线程；
             # 在 worker 线程调用会触发 NSInternalInconsistencyException。
-            log.info("Runner window skipped: NSWindow requires macOS main thread")
+            # 调用方需改用 run_blocking() 从主线程运行 GUI。
+            log.warning(
+                "Runner window start() skipped on macOS: NSWindow requires main thread. "
+                "Call run_blocking() from the main thread instead."
+            )
             return
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self.run_blocking, daemon=True)
         self._thread.start()
 
-    def _run(self) -> None:
+    def run_blocking(self) -> None:
+        """在调用线程上创建 Tk 窗口并运行 mainloop。
+
+        阻塞直到 :meth:`stop` 被调用、窗口被销毁。
+
+        macOS 上**必须**从主线程调用（AppKit 限制，违反会触发
+        ``NSInternalInconsistencyException`` 导致进程崩溃）。
+        其他平台无线程限制，但仍是事件循环驱动的正确模式。
+        """
         try:
             self._root = tk.Tk()
             title = "🔒 加密中" if self.direction == "left" else "🔓 解密中"
@@ -147,9 +168,10 @@ class RunnerWindow:
             self._frames = RUN_FRAMES_LEFT if self.direction == "left" else RUN_FRAMES_RIGHT
             self._running = True
             self._animate()
-            self._root.mainloop()
+            self._root.mainloop()  # blocks until stop() schedules destroy
         except Exception as e:
             log.warning(f"Runner window error: {e}")
+        finally:
             self._running = False
 
     def _animate(self) -> None:
